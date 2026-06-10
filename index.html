@@ -2563,6 +2563,7 @@ function computeRow(classCode, idx) {
   const _k = classCode + ":" + idx;
   if (isNaN(s1) && isNaN(s2)) { delete ENTERED[_k]; }
   else { ENTERED[_k] = { s1: isNaN(s1) ? null : s1, s2: isNaN(s2) ? null : s2 }; }
+  if (window.__cloudSave) window.__cloudSave();
 
   // Surcharge manuelle : on affiche le certificat choisi (avec la note si les 2 semestres sont là).
   const _ov = CERT_OVERRIDE[_k];
@@ -2753,6 +2754,7 @@ function calcNoteInput(which, val) {
     const cur = ENTERED[k] || { s1: null, s2: null };
     cur[which] = ok;
     if (cur.s1 == null && cur.s2 == null) delete ENTERED[k]; else ENTERED[k] = cur;
+    if (window.__cloudSave) window.__cloudSave();
   }
   renderStudentCard(currentStudent());
 }
@@ -3052,6 +3054,7 @@ function exportClassToExcel() {
    AJOUT — Statistiques & pourcentages
    ==================================================================== */
 const ENTERED = {};            // notes saisies dans le tableau : "classe:idx" -> {s1,s2}
+window.ENTERED = ENTERED; window.CERT_OVERRIDE = CERT_OVERRIDE;   // exposés pour la synchro Firestore
 let STAT_YEAR = "prev";        // "prev" = 2024/2025 (enregistré) · "cur" = 2025/2026 (saisi)
 
 const STAT_KEYS = ["excellence", "merite", "honneur", "encouragement", "potentiel", "confiance"];
@@ -3388,6 +3391,8 @@ document.addEventListener("keydown", (ev) => {
     var app2 = appMod.initializeApp(CFG, "secondary");
     var auth = A.getAuth(app);
     var auth2 = A.getAuth(app2);
+    var F = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+    var db = F.getFirestore(app);
   } catch (e) {
     gateError("Impossible de se connecter à Firebase. Vérifiez votre connexion Internet et votre configuration, puis rechargez.");
     return;
@@ -3407,8 +3412,37 @@ document.addEventListener("keydown", (ev) => {
     var el = document.getElementById("login-user"); if (el) el.focus();
   }
 
+  // ---- Synchronisation des notes & modifications via Firestore (cloud) ----
+  var DOC = F.doc(db, "appdata", "grades");
+  var saveTimer = null;
+  window.__cloudSave = function () {
+    if (!db || window.__loading) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {
+      F.setDoc(DOC, {
+        entered: JSON.stringify(window.ENTERED || {}),
+        overrides: JSON.stringify(window.CERT_OVERRIDE || {}),
+        updatedAt: Date.now()
+      }).catch(function (e) { console.warn("Cloud save:", e); });
+    }, 800);
+  };
+  async function loadCloud() {
+    if (!db) return;
+    try {
+      var s = await F.getDoc(DOC);
+      if (s.exists()) {
+        var d = s.data() || {};
+        if (d.entered)   { var en = JSON.parse(d.entered);   for (var k in en) window.ENTERED[k] = en[k]; }
+        if (d.overrides) { var ov = JSON.parse(d.overrides); for (var k2 in ov) window.CERT_OVERRIDE[k2] = ov[k2]; }
+      }
+      window.__loading = true;
+      try { var tc = document.getElementById("tableClasse"); if (tc && tc.value && window.renderClassTable) window.renderClassTable(); } catch (e) {}
+      window.__loading = false;
+    } catch (e) { console.warn("Cloud load:", e); }
+  }
+
   A.onAuthStateChanged(auth, function (u) {
-    if (u) enterApp(emailToUser(u.email)); else showGate();
+    if (u) { enterApp(emailToUser(u.email)); loadCloud(); } else showGate();
   });
 
   window.doLogin = async function () {
