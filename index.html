@@ -1099,6 +1099,7 @@ body.locked{overflow:hidden}
 .acct-add input:focus{border-color:var(--gold)}
 .acct-add button{padding:10px 16px;border:none;border-radius:10px;background:linear-gradient(135deg,var(--gold),var(--gold-light));color:#fff;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
 .acct-msg{font-family:'DM Sans',sans-serif;font-size:12.5px;color:var(--text-soft);margin-top:12px;min-height:16px}
+.acct-info{font-family:'DM Sans',sans-serif;font-size:12.5px;color:var(--text-soft);line-height:1.6;margin:0 0 16px}
 .acct-close{margin-top:18px;width:100%;padding:10px;border:1px solid var(--cream-dark);border-radius:10px;background:var(--white);font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;color:var(--navy);cursor:pointer}
 
 
@@ -1152,11 +1153,11 @@ body.locked{overflow:hidden}
 <!-- Gestion des comptes (admin) -->
 <div id="accounts-modal" class="acct-modal" hidden>
   <div class="acct-card">
-    <h3>Gérer les comptes</h3>
-    <div id="acct-list"></div>
+    <h3>Créer un compte</h3>
+    <p class="acct-info">Créez un identifiant et un mot de passe pour un nouvel utilisateur. Le compte est enregistré sur Firebase et fonctionne sur tous les appareils. La liste et la suppression des comptes se gèrent dans la console Firebase (Authentication).</p>
     <div class="acct-add">
       <input type="text" id="new-user" placeholder="Nouvel identifiant" autocomplete="off">
-      <input type="text" id="new-pass" placeholder="Mot de passe" autocomplete="off">
+      <input type="text" id="new-pass" placeholder="Mot de passe (min. 6 caractères)" autocomplete="off">
       <button type="button" onclick="addAccount()">Créer le compte</button>
     </div>
     <div id="acct-msg" class="acct-msg"></div>
@@ -3351,19 +3352,46 @@ document.addEventListener("keydown", (ev) => {
 });
 
 </script>
-<script>
-/* ===== Connexion & gestion de comptes (verrou côté navigateur) ===== */
-(function () {
-  var DEFAULT_ACCOUNTS = { "yassine": "123456" };
-  var ACCT_KEY = "anglo_accounts_v1";
-  var SESS_KEY = "anglo_session_v1";
+<script type="module">
+/* ===== Connexion & comptes via Firebase Authentication ===== */
+(async function () {
+  var CFG = {
+    apiKey: "AIzaSyB14saxDfk_AdJ9pM-mVDlQjgs5sJ0Fnwo",
+    authDomain: "angloschool-27ded.firebaseapp.com",
+    projectId: "angloschool-27ded"
+  };
+  var EMAIL_SUFFIX = "@anglo.app";   // les identifiants sont convertis en e-mails pour Firebase
   var ADMIN_USER = "yassine";
+  var DEFAULT_ADMIN_PASS = "123456";
 
-  function extraAccounts() { try { return JSON.parse(localStorage.getItem(ACCT_KEY) || "{}") || {}; } catch (e) { return {}; } }
-  function allAccounts() { return Object.assign({}, DEFAULT_ACCOUNTS, extraAccounts()); }
-  function getSession() { try { return sessionStorage.getItem(SESS_KEY); } catch (e) { return null; } }
-  function setSession(u) { try { sessionStorage.setItem(SESS_KEY, u); } catch (e) {} }
-  function clearSession() { try { sessionStorage.removeItem(SESS_KEY); } catch (e) {} }
+  function gateError(msg) { var e = document.getElementById("login-error"); if (e) { e.textContent = msg; e.hidden = false; } }
+  function userToEmail(u) { u = (u || "").trim().toLowerCase(); return u.indexOf("@") >= 0 ? u : u + EMAIL_SUFFIX; }
+  function emailToUser(em) { em = em || ""; var i = em.indexOf(EMAIL_SUFFIX); return i >= 0 ? em.slice(0, i) : em; }
+  function frMsg(code) {
+    switch (code) {
+      case "auth/invalid-credential": case "auth/wrong-password": case "auth/user-not-found": return "Identifiant ou mot de passe incorrect.";
+      case "auth/invalid-email": return "Identifiant invalide.";
+      case "auth/too-many-requests": return "Trop de tentatives. Réessayez plus tard.";
+      case "auth/network-request-failed": return "Problème de connexion Internet.";
+      case "auth/operation-not-allowed": return "Activez « E-mail/Mot de passe » dans Firebase \u2192 Authentication.";
+      case "auth/weak-password": return "Mot de passe trop court (min. 6 caractères).";
+      case "auth/email-already-in-use": return "Cet identifiant existe déjà.";
+      default: return null;
+    }
+  }
+
+  var A;
+  try {
+    var appMod = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+    A = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+    var app = appMod.initializeApp(CFG);
+    var app2 = appMod.initializeApp(CFG, "secondary");
+    var auth = A.getAuth(app);
+    var auth2 = A.getAuth(app2);
+  } catch (e) {
+    gateError("Impossible de se connecter à Firebase. Vérifiez votre connexion Internet et votre configuration, puis rechargez.");
+    return;
+  }
 
   function enterApp(user) {
     var g = document.getElementById("login-gate"); if (g) g.style.display = "none";
@@ -3372,56 +3400,68 @@ document.addEventListener("keydown", (ev) => {
     var nt = document.getElementById("user-name-txt"); if (nt) nt.textContent = user;
     var bm = document.getElementById("btn-manage"); if (bm) bm.hidden = (user !== ADMIN_USER);
   }
+  function showGate() {
+    var g = document.getElementById("login-gate"); if (g) g.style.display = "";
+    document.body.classList.add("locked");
+    var bar = document.getElementById("user-bar"); if (bar) bar.hidden = true;
+    var el = document.getElementById("login-user"); if (el) el.focus();
+  }
 
-  window.doLogin = function () {
+  A.onAuthStateChanged(auth, function (u) {
+    if (u) enterApp(emailToUser(u.email)); else showGate();
+  });
+
+  window.doLogin = async function () {
     var u = (document.getElementById("login-user").value || "").trim();
     var p = document.getElementById("login-pass").value || "";
-    var accts = allAccounts();
-    if (accts[u] != null && accts[u] === p) { setSession(u); enterApp(u); }
-    else {
-      document.getElementById("login-error").hidden = false;
+    var err = document.getElementById("login-error"); if (err) err.hidden = true;
+    if (!u || !p) { gateError("Saisissez l'identifiant et le mot de passe."); return; }
+    var email = userToEmail(u);
+    try {
+      await A.signInWithEmailAndPassword(auth, email, p);
+    } catch (e) {
+      // Premier lancement : on crée automatiquement le compte administrateur par défaut.
+      if ((e.code === "auth/user-not-found" || e.code === "auth/invalid-credential") && u.toLowerCase() === ADMIN_USER && p === DEFAULT_ADMIN_PASS) {
+        try { await A.createUserWithEmailAndPassword(auth, email, p); return; }
+        catch (e2) {
+          if (e2.code === "auth/email-already-in-use") gateError("Identifiant ou mot de passe incorrect.");
+          else gateError(frMsg(e2.code) || ("Erreur : " + (e2.message || e2.code)));
+          return;
+        }
+      }
+      gateError(frMsg(e.code) || ("Erreur : " + (e.message || e.code)));
       document.getElementById("login-pass").value = "";
-      document.getElementById("login-pass").focus();
     }
   };
-  window.logout = function () { clearSession(); location.reload(); };
 
-  window.openAccounts = function () { renderAccts(); document.getElementById("accounts-modal").hidden = false; };
+  window.logout = async function () { try { await A.signOut(auth); } catch (e) {} location.reload(); };
+
+  window.openAccounts = function () { document.getElementById("acct-msg").textContent = ""; document.getElementById("accounts-modal").hidden = false; };
   window.closeAccounts = function () { document.getElementById("accounts-modal").hidden = true; document.getElementById("acct-msg").textContent = ""; };
-  function renderAccts() {
-    var all = allAccounts();
-    document.getElementById("acct-list").innerHTML = Object.keys(all).map(function (u) {
-      var isDef = DEFAULT_ACCOUNTS[u] != null;
-      return '<div class="acct-row"><span>\uD83D\uDC64 ' + u + (isDef ? ' <em>(admin)</em>' : '') + '</span>' +
-             (isDef ? '' : '<button type="button" onclick="delAccount(\'' + u + '\')">Supprimer</button>') + '</div>';
-    }).join("");
-  }
-  window.addAccount = function () {
+
+  window.addAccount = async function () {
     var u = (document.getElementById("new-user").value || "").trim();
     var p = document.getElementById("new-pass").value || "";
     var msg = document.getElementById("acct-msg");
     if (!u || !p) { msg.textContent = "Indiquez un identifiant et un mot de passe."; return; }
-    if (allAccounts()[u] != null) { msg.textContent = "Cet identifiant existe déjà."; return; }
+    if (p.length < 6) { msg.textContent = "Le mot de passe doit faire au moins 6 caractères."; return; }
+    msg.textContent = "Création en cours\u2026";
     try {
-      var ex = extraAccounts(); ex[u] = p; localStorage.setItem(ACCT_KEY, JSON.stringify(ex));
-      document.getElementById("new-user").value = ""; document.getElementById("new-pass").value = "";
-      msg.textContent = "Compte créé \u2713 (enregistré sur ce navigateur).";
-      renderAccts();
-    } catch (e) { msg.textContent = "Impossible d'enregistrer : ce navigateur bloque le stockage local."; }
-  };
-  window.delAccount = function (u) {
-    try { var ex = extraAccounts(); delete ex[u]; localStorage.setItem(ACCT_KEY, JSON.stringify(ex)); renderAccts(); } catch (e) {}
+      // app secondaire : crée le compte sans déconnecter l'administrateur.
+      await A.createUserWithEmailAndPassword(auth2, userToEmail(u), p);
+      await A.signOut(auth2);
+      document.getElementById("new-user").value = "";
+      document.getElementById("new-pass").value = "";
+      msg.textContent = "Compte créé \u2713 : " + u;
+    } catch (e) {
+      msg.textContent = frMsg(e.code) || ("Erreur : " + (e.message || e.code));
+    }
   };
 
-  (function init() {
-    var s = getSession();
-    if (s && allAccounts()[s] != null) { enterApp(s); }
-    else { var u = document.getElementById("login-user"); if (u) u.focus(); }
-    var passEl = document.getElementById("login-pass");
-    if (passEl) passEl.addEventListener("keydown", function (e) { if (e.key === "Enter") window.doLogin(); });
-    var userEl = document.getElementById("login-user");
-    if (userEl) userEl.addEventListener("keydown", function (e) { if (e.key === "Enter") { var pe = document.getElementById("login-pass"); if (pe) pe.focus(); } });
-  })();
+  var passEl = document.getElementById("login-pass");
+  if (passEl) passEl.addEventListener("keydown", function (e) { if (e.key === "Enter") window.doLogin(); });
+  var userEl = document.getElementById("login-user");
+  if (userEl) userEl.addEventListener("keydown", function (e) { if (e.key === "Enter") { var pe = document.getElementById("login-pass"); if (pe) pe.focus(); } });
 })();
 </script>
 
