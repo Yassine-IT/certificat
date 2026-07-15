@@ -3552,15 +3552,28 @@ const ENTERED = {};            // notes saisies dans le tableau : "classe:idx" -
 window.ENTERED = ENTERED; window.CERT_OVERRIDE = CERT_OVERRIDE;   // exposés pour la synchro Firestore
 let STAT_YEAR = "prev";        // "prev" = 2024/2025 (enregistré) · "cur" = 2025/2026 (saisi)
 
-const STAT_KEYS = ["excellence", "merite", "honneur", "encouragement", "potentiel", "confiance"];
+const STAT_KEYS = ["excellence", "merite", "honneur", "encouragement", "potentiel", "confiance_comportement", "confiance_redoublement", "engagement"];
 const STAT_META = {
-  excellence:    { label: "Excellence",    color: "#2563b8" },
-  merite:        { label: "Mérite",        color: "#23925a" },
-  honneur:       { label: "Honneur",       color: "#d2691e" },
-  encouragement: { label: "Encouragement", color: "#d4a017" },
-  potentiel:     { label: "Potentiel",     color: "#c0392b" },
-  confiance:     { label: "Confiance",     color: "#7f8c8d" },
+  excellence:            { label: "Excellence",              color: "#2563b8" },
+  merite:                { label: "Mérite",                  color: "#23925a" },
+  honneur:               { label: "Honneur",                 color: "#d2691e" },
+  encouragement:         { label: "Encouragement",           color: "#d4a017" },
+  potentiel:             { label: "Potentiel",                color: "#c0392b" },
+  confiance_comportement:{ label: "Confiance (comport.)",    color: "#7f8c8d" },
+  confiance_redoublement:{ label: "Confiance (redoubl.)",    color: "#7b4f2e" },
+  engagement:            { label: "Commitment",              color: "#368364" },
 };
+
+// Traduit une surcharge manuelle du tableau (CERT_OVERRIDE) vers une clé de statistiques.
+// "regression" -> potentiel · "comportement" -> confiance_comportement · "redoublement" -> confiance_redoublement · reste = identique.
+function statKeyFromOverride(ov) {
+  if (!ov || ov === "auto") return null;
+  if (ov === "regression") return "potentiel";
+  if (ov === "comportement") return "confiance_comportement";
+  if (ov === "redoublement") return "confiance_redoublement";
+  if (STAT_KEYS.indexOf(ov) >= 0) return ov; // excellence, merite, honneur, encouragement, engagement
+  return null;
+}
 
 const pct = (n, d) => d > 0 ? Math.round((n / d) * 100) : 0;
 
@@ -3572,7 +3585,10 @@ function certKeyFromShort(short) {
   if (s === "honneur") return "honneur";
   if (s === "encouragement") return "encouragement";
   if (s === "potentiel") return "potentiel";
-  if (s === "confiance") return "confiance";
+  // Les données de l'année précédente ne précisent pas le sous-type (comportement/redoublement) :
+  // on les compte par défaut dans "Confiance (comport.)".
+  if (s === "confiance") return "confiance_comportement";
+  if (s === "confiance (redoubl.)" || s === "confiance redoublement") return "confiance_redoublement";
   return null;
 }
 function certKeyFromNote(note, bareme) {
@@ -3602,12 +3618,16 @@ function collectStatsData(scope, year) {
         const g = ENTERED[code + ":" + i];
         if (g && g.s1 != null && g.s2 != null) {
           const nv = moyenneAnnuelle(g.s1, g.s2);
-          records.push({ key: certKeyFromNote(nv, cls.bareme), moy: nv, prevMoy: (e.length > 4 && e[4] != null) ? e[4] : null });
+          // Priorité à la surcharge manuelle choisie dans le tableau (Potentiel, Confiance, Commitment...),
+          // sinon on retombe sur le calcul automatique à partir de la note.
+          const ovKey = statKeyFromOverride(CERT_OVERRIDE[code + ":" + i]);
+          const key = ovKey || certKeyFromNote(nv, cls.bareme);
+          records.push({ key, moy: nv, prevMoy: (e.length > 4 && e[4] != null) ? e[4] : null });
         }
       }
     });
   });
-  const counts = { excellence: 0, merite: 0, honneur: 0, encouragement: 0, potentiel: 0, confiance: 0 };
+  const counts = { excellence: 0, merite: 0, honneur: 0, encouragement: 0, potentiel: 0, confiance_comportement: 0, confiance_redoublement: 0, engagement: 0 };
   records.forEach((r) => { if (counts[r.key] != null) counts[r.key]++; });
   const moys = records.map((r) => r.moy).filter((m) => m != null);
   const average = moys.length ? moys.reduce((a, b) => a + b, 0) / moys.length : null;
